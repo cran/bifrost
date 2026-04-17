@@ -1,7 +1,7 @@
 #' Search for an Optimal Multi-Regime (Shift) Configuration on a Phylogeny
 #'
 #' @description
-#' Greedy, stepwise search for evolutionary regime shifts on a SIMMAP-style phylogeny
+#' Greedy, stepwise search for evolutionary regime shifts on a phylogeny
 #' using multivariate \code{mvgls} fits from \pkg{mvMORPH}. The routine:
 #' \enumerate{
 #'   \item builds one-shift candidate trees for all internal nodes meeting a tip-size threshold
@@ -15,12 +15,18 @@
 #'
 #' Models are fitted directly in multivariate trait space (no PCA), assuming a multi-rate
 #' Brownian Motion with proportional VCV scaling across regimes. Extra arguments in \code{...}
-#' are forwarded to \code{\link[mvMORPH]{mvgls}} (e.g., \code{method = "LL"} or
-#' \code{method = "PL-LOOCV"}, \code{penalty}, \code{error = TRUE}, etc.).
+#' are forwarded to \code{\link[mvMORPH]{mvgls}}. In practice, \code{method} and
+#' \code{error} are often the most important of these: the package vignettes use
+#' \code{method = "H&L"} for intercept-only, high-dimensional response matrices and
+#' \code{method = "LL"} for formula-based searches with predictors, while
+#' \code{error = TRUE} asks \code{mvgls()} to estimate a nuisance measurement-error
+#' (intraspecific-variance) term from the data.
 #'
-#' @param baseline_tree A rooted SIMMAP/\code{phylo} object representing the baseline
-#'   (single-regime) tree. If not SIMMAP-initialized, it should already be painted to a
-#'   single baseline state and have tip order matching \code{trait_data}.
+#' @param baseline_tree A rooted \code{phylo} (or SIMMAP/\code{phylo}) object representing
+#'   the starting tree. It does not need to already be painted: the function coerces the
+#'   input to a \code{phylo} object and internally paints a single baseline state at the root
+#'   before generating candidate shift configurations. Tip labels must match
+#'   \code{trait_data}.
 #' @param trait_data A \code{matrix} or \code{data.frame} of continuous trait values with row
 #'   names matching \code{baseline_tree$tip.label} (same order). For the default
 #'   \code{formula = "trait_data ~ 1"}, \code{trait_data} is typically supplied as a numeric
@@ -32,7 +38,7 @@
 #'   multivariate trait matrix as the response. This is the appropriate choice for most
 #'   morphometric data where there are no predictor variables. For more general models,
 #'   \code{formula} can reference subsets of \code{trait_data} explicitly, for example
-#'   \code{"trait_data[, 1:5] ~ 1"} to treat columns 1–5 as a multivariate response, or
+#'   \code{"trait_data[, 1:5] ~ 1"} to treat columns 1-5 as a multivariate response, or
 #'   \code{"trait_data[, 1:5] ~ trait_data[, 6]"} to fit a multivariate pGLS with column 6
 #'   as a predictor.
 #' @param min_descendant_tips Integer (\eqn{\ge}1). Minimum number of tips required for an internal node
@@ -76,13 +82,22 @@
 #'   while plots are updating. Set to \code{FALSE} to run quietly (default). Use
 #'   \code{suppressMessages()} (and \code{capture.output()} if needed) to silence or capture output.
 #' @param ... Additional arguments passed to \code{\link[mvMORPH]{mvgls}} (e.g., \code{method},
-#'   \code{penalty}, \code{target}, \code{error}, etc.).
+#'   \code{penalty}, \code{target}, \code{error}, \code{REML}, etc.). In the workflows
+#'   emphasized in the package vignettes, \code{method = "H&L"} is used for
+#'   intercept-only searches on high-dimensional response matrices, whereas
+#'   \code{method = "LL"} is used for formula-based searches with predictors and
+#'   should also be used when \code{IC = "BIC"}. In \pkg{mvMORPH}, \code{method = "H&L"}
+#'   is restricted to intercept-only models and the \code{"RidgeArch"} penalty.
+#'   Setting \code{error = TRUE} asks \code{mvgls()} to estimate a nuisance
+#'   measurement-error (intraspecific-variance) term from the data.
 #'
 #' @details
 #' \strong{Input requirements.}
 #' \itemize{
-#'   \item \emph{Tree:} \code{baseline_tree} should be a rooted \code{phylo} (or SIMMAP-style) tree
+#'   \item \emph{Tree:} \code{baseline_tree} should be a rooted \code{phylo} tree
 #'         with branch lengths interpreted in units of time. An ultrametric tree is not required.
+#'         The starting tree does not need to already be painted; \code{searchOptimalConfiguration()}
+#'         paints a single baseline regime internally before building shifted candidates.
 #'   \item \emph{Trait data alignment:} \code{rownames(trait_data)} must match
 #'         \code{baseline_tree$tip.label} in both names and order; any tips without data should be
 #'         pruned beforehand.
@@ -116,11 +131,17 @@
 #' estimates (when \code{mvgls} is fitted under a PL/ML method).
 #'
 #' For high-dimensional trait datasets (p \eqn{\ge} n), penalized-likelihood settings in
-#' \code{mvgls()} are often required for stable estimation. In practice, methods such as
-#' \code{method = "LL"} or \code{method = "H&L"} combined with appropriate penalties (e.g.,
-#' ridge-type penalties) have proven effective for intercept-only multivariate Brownian
-#' motion models, as illustrated in the package vignettes. Users should consult the
-#' \pkg{mvMORPH} documentation for details on available methods and penalties and
+#' \code{mvgls()} are often required for stable estimation. The package vignettes
+#' distinguish two common workflows. For intercept-only searches on high-dimensional
+#' response matrices (for example, GPA-aligned landmark data), the jaw-shape vignette
+#' uses \code{method = "H&L"} with the default \code{"RidgeArch"} penalty; in
+#' \pkg{mvMORPH}, this is a fast approximation to penalized LOOCV and is only available
+#' for intercept-only models. For formula-based searches with predictors, the avian
+#' skeleton vignette uses \code{method = "LL"} instead. When \code{IC = "BIC"},
+#' \code{method = "LL"} should be used. Across empirical workflows, \code{error = TRUE}
+#' is often a sensible default because it asks \code{mvgls()} to estimate a nuisance
+#' measurement-error (intraspecific-variance) term from the data. Users should consult
+#' the \pkg{mvMORPH} documentation for details on available methods and penalties and
 #' tune these choices to the structure of their data.
 #'
 #' @return A named \code{list} with (at minimum):
@@ -228,6 +249,50 @@
 #' res$shift_nodes_no_uncertainty
 #' res$optimal_ic - res$baseline_ic
 #' str(res$VCVs)
+#'
+#' \dontrun{
+#' # Intercept-only empirical-style search:
+#' # high-dimensional response matrix with H&L + measurement error
+#' res_hl <- searchOptimalConfiguration(
+#'   baseline_tree              = as.phylo(simmap),
+#'   trait_data                 = X,
+#'   formula                    = "trait_data ~ 1",
+#'   min_descendant_tips        = 10,
+#'   num_cores                  = 2,
+#'   shift_acceptance_threshold = 20,
+#'   uncertaintyweights_par     = TRUE,
+#'   IC                         = "GIC",
+#'   plot                       = FALSE,
+#'   method                     = "H&L",
+#'   error                      = TRUE,
+#'   store_model_fit_history    = TRUE,
+#'   verbose                    = TRUE
+#' )
+#'
+#' # Formula-based search with a predictor:
+#' # use LL when the model includes predictors
+#' dat <- data.frame(
+#'   trait1    = X[, 1],
+#'   trait2    = X[, 2],
+#'   predictor = rnorm(nrow(X))
+#' )
+#' rownames(dat) <- simmap$tip.label
+#'
+#' res_ll <- searchOptimalConfiguration(
+#'   baseline_tree              = as.phylo(simmap),
+#'   trait_data                 = dat,
+#'   formula                    = "trait_data[, 1:2] ~ trait_data[, 3]",
+#'   min_descendant_tips        = 10,
+#'   num_cores                  = 2,
+#'   shift_acceptance_threshold = 20,
+#'   IC                         = "GIC",
+#'   plot                       = FALSE,
+#'   method                     = "LL",
+#'   error                      = TRUE,
+#'   store_model_fit_history    = TRUE,
+#'   verbose                    = TRUE
+#' )
+#' }
 #' @importFrom future plan multicore multisession sequential
 #' @importFrom future.apply future_lapply
 #' @importFrom mvMORPH mvgls GIC aicw
@@ -279,7 +344,7 @@ searchOptimalConfiguration <-
     # Capture user input
     user_input <- as.list(match.call())
 
-    # Input tree should be painted SIMMAP tree with global state zero
+    # Coerce to phylo and initialize a single baseline regime at the root
     baseline_tree <- paintSubTree(((as.phylo(baseline_tree))),
                                   node = length(baseline_tree$tip.label) + 1,
                                   state = 0)
