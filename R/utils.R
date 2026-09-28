@@ -9,7 +9,7 @@
 #' outgroup (`ape::root(..., resolve.root = TRUE)`).
 #'
 #' @param tree An object of class \code{phylo}. If unrooted, it is rooted internally.
-#' @param min_tips Integer (\eqn{\ge}1). Minimum number of descendant tips required for an
+#' @param min_tips Integer (\eqn{\ge}2). Minimum number of descendant tips required for an
 #'   internal node to be considered eligible.
 #' @param state Character scalar. The regime label to paint on each eligible subtree.
 #'   Defaults to \code{"shift"}.
@@ -46,13 +46,25 @@
 #' @keywords internal
 #' @noRd
 generatePaintedTrees <- function(tree, min_tips, state = "shift") {
+  if (!inherits(tree, "phylo")) {
+    stop("`tree` must be a phylo object.", call. = FALSE)
+  }
+  min_tips <- .bifrost_check_integer_scalar(
+    min_tips,
+    "min_tips",
+    minimum = 2L
+  )
+  if (!is.character(state) || length(state) != 1L || is.na(state) || !nzchar(state)) {
+    stop("`state` must be a single non-empty character string.", call. = FALSE)
+  }
+
   if (!is.rooted(tree)) {
     tree <- root(tree, outgroup = tree$tip.label[1], resolve.root = TRUE)
   }
 
   getEligibleNodes <- function(tree, min_tips) {
     eligible_nodes <- c()
-    for (node in 1:(Nnode(tree))) {
+    for (node in seq_len(Nnode(tree))) {
       internal_node <- node + Ntip(tree)
       descendants <- getDescendants(tree, internal_node)
       tip_descendants <- tree$tip.label[descendants[descendants <= Ntip(tree)]]
@@ -80,6 +92,20 @@ generatePaintedTrees <- function(tree, min_tips, state = "shift") {
     message(sprintf("%d sub-models generated", length(painted_trees)))
   }
   return(painted_trees)
+}
+
+.bifrost_check_integer_scalar <- function(x, arg, minimum = NULL, maximum = NULL) {
+  if (!is.numeric(x) || length(x) != 1L || !is.finite(x) || x != as.integer(x)) {
+    stop("`", arg, "` must be a single finite integer.", call. = FALSE)
+  }
+  x <- as.integer(x)
+  if (!is.null(minimum) && x < minimum) {
+    stop("`", arg, "` must be a single finite integer >= ", minimum, ".", call. = FALSE)
+  }
+  if (!is.null(maximum) && x > maximum) {
+    stop("`", arg, "` must be a single finite integer <= ", maximum, ".", call. = FALSE)
+  }
+  x
 }
 
 #' Fit mvgls Model to a Painted Tree and Extract GIC Score
@@ -218,8 +244,9 @@ fitMvglsAndExtractBIC <- function(painted_tree, trait_data) {
 #' }
 #' Returns the fitted model along with its Generalized Information Criterion (GIC) score.
 #'
-#' @param formula A character string specifying the model formula
-#'   (e.g., \code{"cbind(trait1, trait2) ~ predictor"}).
+#' @param formula A character string or formula object specifying the model
+#'   formula (e.g., \code{"cbind(trait1, trait2) ~ predictor"} or
+#'   \code{cbind(trait1, trait2) ~ predictor}).
 #' @param painted_tree An object of class \code{simmap} (see
 #'   \code{\link[phytools]{paintSubTree}}) used as the phylogenetic tree.
 #' @param trait_data A \code{data.frame} or \code{matrix} of trait values with
@@ -233,9 +260,10 @@ fitMvglsAndExtractBIC <- function(painted_tree, trait_data) {
 #' }
 #'
 #' @details
-#' The function converts the character \code{formula} to an actual formula
-#' object via \code{\link[stats]{as.formula}} before fitting. The number of regimes
-#' in \code{painted_tree} is detected with \code{\link[phytools]{getStates}}.
+#' The function accepts either a character string or a formula object. Named
+#' formulas automatically use \code{trait_data} as the model-frame data when no
+#' explicit \code{data} argument is supplied. The number of regimes in
+#' \code{painted_tree} is detected with \code{\link[phytools]{getStates}}.
 #'
 #' @seealso \code{\link[mvMORPH]{mvgls}}, \code{\link[mvMORPH]{GIC}},
 #'   \code{\link[phytools]{getStates}}, \code{\link[stats]{as.formula}}
@@ -260,23 +288,20 @@ fitMvglsAndExtractBIC <- function(painted_tree, trait_data) {
 #' @keywords internal
 #' @noRd
 fitMvglsAndExtractGIC.formula <- function(formula, painted_tree, trait_data, ...) {
-  # Ensure trait_data is a matrix
-  #if (!is.matrix(trait_data)) {
-  #  stop("trait_data must be a matrix.")
-  #}
-
   # Make sure the row names match the tip labels of the painted_tree
   if (!identical(rownames(trait_data), painted_tree$tip.label)) {
     stop("Row names of trait_data must exactly match the tip labels of the tree.")
   }
 
-  # Validate that formula is provided and is a character
-  if (missing(formula) || !is.character(formula)) {
-    stop("A character formula must be provided.")
-  }
-
-  # Convert the string formula to an actual formula object
-  formula_obj <- as.formula(formula)
+  args_list <- list(...)
+  normalized_call <- normalizeMvglsFormulaCall(
+    formula,
+    trait_data,
+    args_list,
+    allow_single_response = TRUE
+  )
+  formula_obj <- normalized_call$formula
+  args_list <- normalized_call$args_list
 
   # Fit the mvgls model using the user-defined formula
 
@@ -284,9 +309,15 @@ fitMvglsAndExtractGIC.formula <- function(formula, painted_tree, trait_data, ...
   # Then we switch back to BMM
 
   if(length(unique(getStates(tree = painted_tree))) == 1){
-    model <- mvgls(formula_obj, tree = painted_tree, model = "BM", ...)
+    model <- do.call(
+      mvgls,
+      c(list(formula_obj, tree = painted_tree, model = "BM"), args_list)
+    )
   } else {
-    model <- mvgls(formula_obj, tree = painted_tree, model = "BMM", ...)
+    model <- do.call(
+      mvgls,
+      c(list(formula_obj, tree = painted_tree, model = "BMM"), args_list)
+    )
   }
   gic_value <- GIC(model)
 
@@ -305,8 +336,9 @@ fitMvglsAndExtractGIC.formula <- function(formula, painted_tree, trait_data, ...
 #' }
 #' Returns the fitted model along with its Bayesian Information Criterion (BIC) score.
 #'
-#' @param formula A character string specifying the model formula
-#'   (e.g., \code{"cbind(trait1, trait2) ~ predictor"}).
+#' @param formula A character string or formula object specifying the model
+#'   formula (e.g., \code{"cbind(trait1, trait2) ~ predictor"} or
+#'   \code{cbind(trait1, trait2) ~ predictor}).
 #' @param painted_tree An object of class \code{simmap} (see
 #'   \code{\link[phytools]{paintSubTree}}) used as the phylogenetic tree.
 #' @param trait_data A \code{data.frame} or \code{matrix} of trait values with
@@ -320,9 +352,10 @@ fitMvglsAndExtractGIC.formula <- function(formula, painted_tree, trait_data, ...
 #' }
 #'
 #' @details
-#' The function converts the character \code{formula} to an actual formula
-#' object via \code{\link[stats]{as.formula}} before fitting. The number of regimes
-#' in \code{painted_tree} is detected with \code{\link[phytools]{getStates}}.
+#' The function accepts either a character string or a formula object. Named
+#' formulas automatically use \code{trait_data} as the model-frame data when no
+#' explicit \code{data} argument is supplied. The number of regimes in
+#' \code{painted_tree} is detected with \code{\link[phytools]{getStates}}.
 #'
 #' @seealso \code{\link[mvMORPH]{mvgls}}, \code{\link[stats]{BIC}},
 #'   \code{\link[phytools]{getStates}}, \code{\link[stats]{as.formula}}
@@ -347,23 +380,24 @@ fitMvglsAndExtractGIC.formula <- function(formula, painted_tree, trait_data, ...
 #' @keywords internal
 #' @noRd
 fitMvglsAndExtractBIC.formula <- function(formula, painted_tree, trait_data, ...) {
-  # # Ensure trait_data is a matrix
-  # if (!is.matrix(trait_data)) {
-  #   stop("trait_data must be a matrix.")
-  # }
-
   # Make sure the row names match the tip labels of the painted_tree
   if (!identical(rownames(trait_data), painted_tree$tip.label)) {
     stop("Row names of trait_data must exactly match the tip labels of the tree.")
   }
 
-  # Validate that formula is provided and is a character
-  if (missing(formula) || !is.character(formula)) {
-    stop("A character formula must be provided.")
+  args_list <- list(...)
+  if (!("method" %in% names(args_list))) {
+    args_list$method <- "LL"
   }
 
-  # Convert the string formula to an actual formula object
-  formula_obj <- as.formula(formula)
+  normalized_call <- normalizeMvglsFormulaCall(
+    formula,
+    trait_data,
+    args_list,
+    allow_single_response = TRUE
+  )
+  formula_obj <- normalized_call$formula
+  args_list <- normalized_call$args_list
 
   # Fit the mvgls model using the user-defined formula
 
@@ -371,9 +405,15 @@ fitMvglsAndExtractBIC.formula <- function(formula, painted_tree, trait_data, ...
   # Then we switch back to BMM
 
   if(length(unique(getStates(tree = painted_tree))) == 1){
-    model <- mvgls(formula_obj, tree = painted_tree, model = "BM", ...)
+    model <- do.call(
+      mvgls,
+      c(list(formula_obj, tree = painted_tree, model = "BM"), args_list)
+    )
   } else {
-    model <- mvgls(formula_obj, tree = painted_tree, model = "BMM", ...)
+    model <- do.call(
+      mvgls,
+      c(list(formula_obj, tree = painted_tree, model = "BMM"), args_list)
+    )
   }
   bic_value <- BIC(model)
 
@@ -540,7 +580,15 @@ calculateAllDeltaGIC <- function(model_results, painted_tree_list) {
 #' @noRd
 paintSubTree_mod <- function(tree, node, state, anc.state = "1", stem = FALSE, overwrite = TRUE) {
   if (!inherits(tree, "phylo")) stop("tree should be an object of class \"phylo\".")
-  if (stem == 0 && node <= length(tree$tip)) stop("stem must be TRUE for node <= N")
+  node <- .bifrost_check_tree_node(
+    tree = tree,
+    node = node,
+    arg = "node",
+    allow_tip = TRUE,
+    allow_root = TRUE
+  )
+  n_tip <- ape::Ntip(tree)
+  if (identical(stem, FALSE) && node <= n_tip) stop("stem must be TRUE for node <= N")
   if (is.null(tree$edge.length)) tree <- compute.brlen(tree)
 
   if (is.null(tree$maps)) {
@@ -560,7 +608,7 @@ paintSubTree_mod <- function(tree, node, state, anc.state = "1", stem = FALSE, o
     }
   } else {
     # Modified behavior: Selective overwriting
-    target_state <- if (node > length(tree$tip)) names(maps[[which(tree$edge[,2] == node)]]) else anc.state
+    target_state <- if (node > n_tip) names(maps[[which(tree$edge[,2] == node)]]) else anc.state
     desc <- getDescendants(tree, node)
     z <- which(tree$edge[,2] %in% desc)
     for (i in z) {
@@ -571,7 +619,7 @@ paintSubTree_mod <- function(tree, node, state, anc.state = "1", stem = FALSE, o
     }
   }
 
-  if (stem && node > length(tree$tip)) {
+  if (stem && node > n_tip) {
     stem_edge <- which(tree$edge[,2] == node)
     maps[[stem_edge]] <- sum(maps[[stem_edge]]) * c(1 - stem, stem)
     names(maps[[stem_edge]]) <- c(anc.state, state)
@@ -660,11 +708,20 @@ paintSubTree_mod <- function(tree, node, state, anc.state = "1", stem = FALSE, o
 #' @noRd
 paintSubTree_removeShift <- function(tree, shift_node, stem = FALSE) {
   if (!inherits(tree, "phylo")) stop("tree should be an object of class 'phylo'.")
+  shift_node <- .bifrost_check_tree_node(
+    tree = tree,
+    node = shift_node,
+    arg = "shift_node",
+    allow_tip = TRUE,
+    allow_root = FALSE
+  )
+  n_tip <- ape::Ntip(tree)
   if (is.null(tree$edge.length)) tree <- compute.brlen(tree)
 
   if (is.null(tree$maps)) {
     maps <- as.list(tree$edge.length)
     for (i in 1:length(maps)) names(maps[[i]]) <- "1"  # Assuming '1' is the default ancestral state
+    tree$maps <- maps
   } else {
     maps <- tree$maps
   }
@@ -674,7 +731,7 @@ paintSubTree_removeShift <- function(tree, shift_node, stem = FALSE) {
   parent_state <- if (!is.na(parent_node)) getStates(tree, type = "nodes")[as.character(parent_node)] else "1"  # Default to '1' if parent is NA
 
   # Handle stem painting if applicable
-  if (stem && shift_node > length(tree$tip)) {
+  if (stem && shift_node > n_tip) {
     stem_edge <- which(tree$edge[,2] == shift_node)
     maps[[stem_edge]] <- sum(maps[[stem_edge]]) * c(1 - stem, stem)
     names(maps[[stem_edge]]) <- c(parent_state, parent_state)
@@ -767,6 +824,14 @@ paintSubTree_removeShift <- function(tree, shift_node, stem = FALSE) {
 #' @keywords internal
 #' @noRd
 addShiftToModel <- function(tree, shift_node, current_shift_id) {
+  shift_node <- .bifrost_check_tree_node(
+    tree = tree,
+    node = shift_node,
+    arg = "shift_node",
+    allow_tip = FALSE,
+    allow_root = FALSE
+  )
+
   # Update the shift ID
   next_shift_id <- current_shift_id + 1
 
@@ -775,6 +840,36 @@ addShiftToModel <- function(tree, shift_node, current_shift_id) {
 
   # Return a list with the updated tree and the new shift ID
   return(list(tree = painted_tree, shift_id = next_shift_id))
+}
+
+.bifrost_check_tree_node <- function(tree,
+                                     node,
+                                     arg = "node",
+                                     allow_tip = TRUE,
+                                     allow_root = TRUE) {
+  if (!inherits(tree, "phylo")) {
+    stop("`tree` must be a phylo object.", call. = FALSE)
+  }
+  if (!is.numeric(node) || length(node) != 1L || !is.finite(node) || node != as.integer(node)) {
+    stop("`", arg, "` must be a single finite integer node id.", call. = FALSE)
+  }
+
+  node <- as.integer(node)
+  n_tip <- ape::Ntip(tree)
+  root <- n_tip + 1L
+  max_node <- n_tip + ape::Nnode(tree)
+
+  if (node < 1L || node > max_node) {
+    stop("`", arg, "` must identify a node in `tree`.", call. = FALSE)
+  }
+  if (!allow_tip && node <= n_tip) {
+    stop("`", arg, "` must be an internal node.", call. = FALSE)
+  }
+  if (!allow_root && node == root) {
+    stop("`", arg, "` cannot be the root node.", call. = FALSE)
+  }
+
+  node
 }
 
 #' Remove a Painted Shift from a SIMMAP Tree

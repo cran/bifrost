@@ -10,6 +10,40 @@ skip_if_missing_deps <- function() {
   testthat::skip_if_not_installed("future")
 }
 
+test_that("the internal search fixture contains one simulation", {
+  fixture <- readRDS(testthat::test_path("fixtures", "simdata.RDS"))
+  testthat::expect_length(fixture, 1L)
+})
+
+test_that("search defaults use the evaluated conservative starting settings", {
+  search_formals <- formals(searchOptimalConfiguration)
+
+  testthat::expect_identical(search_formals$min_descendant_tips, 10)
+  testthat::expect_identical(search_formals$shift_acceptance_threshold, 20)
+})
+
+test_that("search rejects descendant-tip cutoffs below two tips", {
+  skip_if_missing_deps()
+
+  tree <- ape::rtree(4L)
+  trait_data <- matrix(
+    seq_len(ape::Ntip(tree) * 2L),
+    nrow = ape::Ntip(tree),
+    dimnames = list(tree$tip.label, c("trait_1", "trait_2"))
+  )
+
+  testthat::expect_error(
+    searchOptimalConfiguration(
+      baseline_tree = tree,
+      trait_data = trait_data,
+      min_descendant_tips = 1L,
+      progress = FALSE
+    ),
+    "`min_descendant_tips` must be a single finite integer >= 2",
+    fixed = TRUE
+  )
+})
+
 # ---- locate and load fixture -------------------------------------------------
 load_simdata_fixture <- function() {
   # Expect the file at tests/testthat/fixtures/simdata.RDS
@@ -69,6 +103,353 @@ expect_numeric_scalar <- function(x) {
   testthat::expect_true(is.numeric(x) && length(x) == 1L && is.finite(x))
 }
 
+make_search_diagnostic_tree <- function() {
+  tree <- ape::stree(12L, type = "left")
+  tree$edge.length <- rep(1, nrow(tree$edge))
+  tree
+}
+
+run_fast_diagnostic_search <- function(min_descendant_tips,
+                                       shift_acceptance_threshold,
+                                       IC = "GIC") {
+  tree <- make_search_diagnostic_tree()
+  trait_data <- matrix(
+    seq_len(ape::Ntip(tree) * 2L),
+    nrow = ape::Ntip(tree),
+    dimnames = list(tree$tip.label, c("trait_1", "trait_2"))
+  )
+
+  search_env <- environment(searchOptimalConfiguration)
+  local_search_rebind(
+    ".bifrost_search_fit_ic",
+    function(IC, formula, tree, trait_data, ...) {
+      list(
+        model = list(corrSt = list(phy = tree)),
+        GIC = list(GIC = 100),
+        BIC = list(BIC = 100)
+      )
+    },
+    search_env
+  )
+  local_search_rebind(
+    "extractRegimeVCVs",
+    function(model_output) list(),
+    search_env
+  )
+
+  searchOptimalConfiguration(
+    baseline_tree = tree,
+    trait_data = trait_data,
+    formula = "trait_data ~ 1",
+    min_descendant_tips = min_descendant_tips,
+    num_cores = 1,
+    shift_acceptance_threshold = shift_acceptance_threshold,
+    plot = FALSE,
+    IC = IC,
+    store_model_fit_history = FALSE,
+    verbose = FALSE,
+    progress = FALSE
+  )
+}
+
+collect_search_settings_warnings <- function(code) {
+  warnings <- list()
+  value <- withCallingHandlers(
+    force(code),
+    bifrost_search_settings_warning = function(w) {
+      warnings[[length(warnings) + 1L]] <<- w
+      invokeRestart("muffleWarning")
+    }
+  )
+  list(value = value, warnings = warnings)
+}
+
+muffle_search_settings_warning <- function(code) {
+  withCallingHandlers(
+    force(code),
+    bifrost_search_settings_warning = function(w) {
+      invokeRestart("muffleWarning")
+    }
+  )
+}
+
+test_that("search rejects invalid acceptance thresholds before fitting", {
+  skip_if_missing_deps()
+
+  tree <- ape::rtree(4L)
+  # Missing row names would fail during fitting, proving these errors occur first.
+  trait_data <- matrix(seq_len(8L), nrow = 4L)
+  invalid_thresholds <- list(
+    NA_real_,
+    numeric(),
+    c(10, 20),
+    "20",
+    -1,
+    Inf,
+    -Inf
+  )
+
+  for (threshold in invalid_thresholds) {
+    testthat::expect_error(
+      searchOptimalConfiguration(
+        baseline_tree = tree,
+        trait_data = trait_data,
+        min_descendant_tips = 4L,
+        shift_acceptance_threshold = threshold,
+        progress = FALSE
+      ),
+      "`shift_acceptance_threshold` must be one finite nonnegative number.",
+      fixed = TRUE
+    )
+  }
+})
+
+test_that("search warns when min_descendant_tips is below the evaluated setting", {
+  skip_if_missing_deps()
+
+  captured <- collect_search_settings_warnings(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 9L,
+      shift_acceptance_threshold = 20,
+      IC = "GIC"
+    )
+  )
+
+  testthat::expect_length(captured$warnings, 1L)
+  testthat::expect_s3_class(
+    captured$warnings[[1L]],
+    "bifrost_search_settings_warning"
+  )
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    "`min_descendant_tips = 9` is below 10"
+  )
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    paste0(
+      "Choose `min_descendant_tips` so that candidate clades contain enough ",
+      "terminal taxa to support stable estimation of evolutionary parameters, ",
+      "while retaining a meaningful set of candidate shifts."
+    ),
+    fixed = TRUE
+  )
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    paste0(
+      "No single default guarantees reliable estimation; appropriate settings ",
+      "depend on dataset characteristics, including trait dimensionality and ",
+      "phylogenetic structure."
+    ),
+    fixed = TRUE
+  )
+  testthat::expect_false(grepl(
+    "shift_acceptance_threshold",
+    conditionMessage(captured$warnings[[1L]]),
+    fixed = TRUE
+  ))
+})
+
+test_that("search warns below the acceptance threshold evaluated in simulations", {
+  skip_if_missing_deps()
+
+  captured <- collect_search_settings_warnings(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 10L,
+      shift_acceptance_threshold = 9,
+      IC = "GIC"
+    )
+  )
+
+  testthat::expect_length(captured$warnings, 1L)
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    paste0(
+      "`shift_acceptance_threshold = 9` is below the ΔIC = 10 value ",
+      "evaluated by Berv et al. (2026)"
+    ),
+    fixed = TRUE
+  )
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    "focal analysis used ΔGIC = 20"
+  )
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    "Low acceptance thresholds may admit marginally supported shifts."
+  )
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    paste0(
+      "Recommendation: examine per-shift IC weights and assess ",
+      "dataset-specific sensitivity or model performance."
+    ),
+    fixed = TRUE
+  )
+  testthat::expect_false(grepl(
+    "min_descendant_tips",
+    conditionMessage(captured$warnings[[1L]]),
+    fixed = TRUE
+  ))
+})
+
+test_that("search emits one advisory when both permissive conditions apply", {
+  skip_if_missing_deps()
+
+  captured <- collect_search_settings_warnings(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 5L,
+      shift_acceptance_threshold = 5,
+      IC = "GIC"
+    )
+  )
+
+  testthat::expect_length(captured$warnings, 1L)
+  message <- conditionMessage(captured$warnings[[1L]])
+  testthat::expect_identical(
+    message,
+    paste0(
+      "Potentially permissive search settings: ",
+      "`min_descendant_tips = 5` is below 10. Choose `min_descendant_tips` so ",
+      "that candidate clades contain enough terminal taxa to support stable ",
+      "estimation of evolutionary parameters, while retaining a ",
+      "meaningful set of candidate shifts. No single default guarantees ",
+      "reliable estimation; appropriate settings depend on dataset ",
+      "characteristics, ",
+      "including trait dimensionality and phylogenetic structure. ",
+      "`shift_acceptance_threshold = 5` is below the ΔIC = 10 value ",
+      "evaluated by Berv et al. (2026); their focal analysis used ΔGIC = 20. ",
+      "Low acceptance thresholds may admit marginally supported shifts. ",
+      "Recommendation: examine per-shift IC weights and ",
+      "assess dataset-specific sensitivity or model performance."
+    )
+  )
+})
+
+test_that("search emits no advisory at the simulation acceptance threshold", {
+  skip_if_missing_deps()
+
+  captured <- collect_search_settings_warnings(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 10L,
+      shift_acceptance_threshold = 10,
+      IC = "GIC"
+    )
+  )
+
+  testthat::expect_length(captured$warnings, 0L)
+})
+
+test_that("BIC searches receive the acceptance-threshold advisory below 10", {
+  skip_if_missing_deps()
+
+  captured <- collect_search_settings_warnings(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 10L,
+      shift_acceptance_threshold = 9,
+      IC = "BIC"
+    )
+  )
+
+  testthat::expect_length(captured$warnings, 1L)
+  testthat::expect_match(
+    conditionMessage(captured$warnings[[1L]]),
+    paste0(
+      "`shift_acceptance_threshold = 9` is below the ΔIC = 10 value ",
+      "evaluated by Berv et al. (2026)"
+    ),
+    fixed = TRUE
+  )
+})
+
+test_that("BIC searches receive no acceptance-threshold advisory at 10", {
+  skip_if_missing_deps()
+
+  captured <- collect_search_settings_warnings(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 10L,
+      shift_acceptance_threshold = 10,
+      IC = "BIC"
+    )
+  )
+
+  testthat::expect_length(captured$warnings, 0L)
+})
+
+test_that("search reports zero non-root candidates and returns the baseline fit", {
+  skip_if_missing_deps()
+
+  testthat::expect_warning(
+    result <- run_fast_diagnostic_search(
+      min_descendant_tips = 12L,
+      shift_acceptance_threshold = 20,
+      IC = "GIC"
+    ),
+    "No non-root internal nodes meet `min_descendant_tips = 12`"
+  )
+
+  testthat::expect_s3_class(result, "bifrost_search")
+  testthat::expect_identical(result$num_candidates, 0L)
+  testthat::expect_length(result$shift_nodes_no_uncertainty, 0L)
+  testthat::expect_equal(result$optimal_ic, result$baseline_ic)
+  testthat::expect_false(is.null(result$model_no_uncertainty))
+})
+
+test_that("search rejects a descendant-tip cutoff larger than the tree", {
+  skip_if_missing_deps()
+
+  testthat::expect_error(
+    run_fast_diagnostic_search(
+      min_descendant_tips = 13L,
+      shift_acceptance_threshold = 20,
+      IC = "GIC"
+    ),
+    paste0(
+      "`min_descendant_tips` \\(13\\) cannot exceed the number of tips ",
+      "in `baseline_tree` \\(12\\)"
+    )
+  )
+})
+
+test_that("search tree initialization discards incoming within-edge SIMMAP segments", {
+  skip_if_missing_deps()
+
+  input <- ape::read.tree(text = "((a:1,b:1):1,c:2);")
+  input <- phytools::paintSubTree(
+    input,
+    node = ape::Ntip(input) + 1L,
+    state = "0",
+    anc.state = "0",
+    stem = FALSE
+  )
+  input <- phytools::paintSubTree(
+    input,
+    node = ape::Ntip(input) + 2L,
+    state = "1",
+    anc.state = "0",
+    stem = 0.5
+  )
+
+  testthat::expect_true(any(lengths(input$maps) > 1L))
+
+  normalized <- bifrost:::.bifrost_search_initialize_tree(input)
+
+  testthat::expect_true(isTRUE(ape::all.equal.phylo(
+    ape::as.phylo(input),
+    ape::as.phylo(normalized)
+  )))
+  testthat::expect_identical(normalized$tip.label, input$tip.label)
+  testthat::expect_equal(normalized$edge.length, input$edge.length)
+  testthat::expect_true(all(lengths(normalized$maps) == 1L))
+  testthat::expect_true(all(unlist(lapply(normalized$maps, names)) == "0"))
+
+  candidates <- generatePaintedTrees(normalized, min_tips = 2L)
+  testthat::expect_true(all(vapply(
+    candidates,
+    function(candidate) all(lengths(candidate$maps) == 1L),
+    logical(1)
+  )))
+})
+
 # Group: end-to-end runs and core outputs
 # Test: searchOptimalConfiguration runs end-to-end on simulated data (GIC) (fixture simdata.RDS; 100-tip subsample; GIC path)
 test_that("searchOptimalConfiguration runs end-to-end on simulated data (GIC)", {
@@ -79,7 +460,7 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (GIC)", 
   X <- built$X
 
   set.seed(123)
-  res <- searchOptimalConfiguration(
+  res <- muffle_search_settings_warning(searchOptimalConfiguration(
     baseline_tree              = baseline,
     trait_data                 = X,
     formula                    = "trait_data ~ 1",
@@ -90,8 +471,9 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (GIC)", 
     IC                         = "GIC",
     store_model_fit_history    = FALSE,
     method                     = "LL",
-    uncertaintyweights = TRUE
-  )
+    uncertaintyweights        = TRUE,
+    progress                   = FALSE
+  ))
 
   # Core structure checks (present names)
   testthat::expect_type(res, "list")
@@ -103,13 +485,17 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (GIC)", 
     "optimal_ic",
     "baseline_ic",
     "IC_used",
-    "num_candidates"
+    "num_candidates",
+    "candidate_nodes"
   ) %in% names(res)))
 
   # Types/values
   expect_numeric_scalar(res$baseline_ic)
   expect_numeric_scalar(res$optimal_ic)
   testthat::expect_true(res$IC_used %in% c("GIC", "BIC"))
+  testthat::expect_type(res$candidate_nodes, "integer")
+  testthat::expect_length(res$candidate_nodes, res$num_candidates)
+  testthat::expect_length(unique(res$candidate_nodes), res$num_candidates)
   # These may be NULL if no shifts are accepted; otherwise phylo
   expect_phylo_or_null(res$tree_no_uncertainty_untransformed)
   expect_phylo_or_null(res$tree_no_uncertainty_transformed)
@@ -133,7 +519,7 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (BIC)", 
   X <- built$X
 
   set.seed(123)
-  res <- searchOptimalConfiguration(
+  res <- muffle_search_settings_warning(searchOptimalConfiguration(
     baseline_tree              = baseline,
     trait_data                 = X,
     formula                    = "trait_data ~ 1",
@@ -144,8 +530,9 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (BIC)", 
     IC                         = "BIC",
     store_model_fit_history    = TRUE,
     method                     = "LL",
-    uncertaintyweights_par = TRUE
-  )
+    uncertaintyweights_par     = TRUE,
+    progress                   = FALSE
+  ))
 
   # Core structure checks (present names)
   testthat::expect_type(res, "list")
@@ -157,13 +544,17 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (BIC)", 
     "optimal_ic",
     "baseline_ic",
     "IC_used",
-    "num_candidates"
+    "num_candidates",
+    "candidate_nodes"
   ) %in% names(res)))
 
   # Types/values
   expect_numeric_scalar(res$baseline_ic)
   expect_numeric_scalar(res$optimal_ic)
   testthat::expect_true(res$IC_used %in% c("GIC", "BIC"))
+  testthat::expect_type(res$candidate_nodes, "integer")
+  testthat::expect_length(res$candidate_nodes, res$num_candidates)
+  testthat::expect_length(unique(res$candidate_nodes), res$num_candidates)
   # These may be NULL if no shifts are accepted; otherwise phylo
   expect_phylo_or_null(res$tree_no_uncertainty_untransformed)
   expect_phylo_or_null(res$tree_no_uncertainty_transformed)
@@ -178,8 +569,44 @@ test_that("searchOptimalConfiguration runs end-to-end on simulated data (BIC)", 
   }
 })
 
+# Test: searchOptimalConfiguration accepts formula objects and mixed-type named formulas
+test_that("searchOptimalConfiguration accepts formula objects and mixed-type named formulas", {
+  skip_if_missing_deps()
+
+  set.seed(2026)
+  baseline <- ape::rtree(20)
+  dat <- data.frame(
+    y1 = rnorm(20),
+    y2 = rnorm(20),
+    size = exp(rnorm(20)),
+    grp = factor(rep(c("a", "b"), length.out = 20))
+  )
+  rownames(dat) <- baseline$tip.label
+
+  res <- suppressWarnings(searchOptimalConfiguration(
+    baseline_tree              = baseline,
+    trait_data                 = dat,
+    formula                    = cbind(y1, y2) ~ log(size) * grp,
+    min_descendant_tips        = 5,
+    num_cores                  = 1,
+    shift_acceptance_threshold = 1e9,
+    plot                       = FALSE,
+    IC                         = "GIC",
+    store_model_fit_history    = FALSE,
+    method                     = "LL",
+    progress                   = FALSE
+  ))
+
+  testthat::expect_type(res, "list")
+  testthat::expect_true(res$IC_used == "GIC")
+  expect_numeric_scalar(res$baseline_ic)
+  expect_numeric_scalar(res$optimal_ic)
+  testthat::expect_true(inherits(res$model_no_uncertainty, "mvgls"))
+  testthat::expect_equal(res$optimal_ic, res$baseline_ic, tolerance = 1e-8)
+})
+
 # Group: ic_weights correctness
-# Test: ic_weights are internally consistent when present (rtree(40) with threshold=-Inf; checks delta/evidence_ratio)
+# Test: ic_weights are internally consistent when present (rtree(40) with threshold=0; checks delta/evidence_ratio)
 test_that("ic_weights are internally consistent when present", {
   skip_if_missing_deps()
 
@@ -188,20 +615,21 @@ test_that("ic_weights are internally consistent when present", {
   X <- matrix(rnorm(40 * 2), ncol = 2)
   rownames(X) <- tr$tip.label
 
-  res <- searchOptimalConfiguration(
+  res <- muffle_search_settings_warning(searchOptimalConfiguration(
     baseline_tree              = tr,
     trait_data                 = X,
     formula                    = "trait_data ~ 1",
     min_descendant_tips        = 5,
     num_cores                  = 1,
-    shift_acceptance_threshold = -Inf,   # encourage accepting shifts
+    shift_acceptance_threshold = 0,
     plot                       = FALSE,
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC",
     uncertaintyweights_par     = TRUE
-  )
+  ))
 
   testthat::expect_true("ic_weights" %in% names(res))
   testthat::expect_true(is.data.frame(res$ic_weights))
@@ -243,7 +671,7 @@ test_that("searchOptimalConfiguration also runs in purely sequential mode", {
   }, add = TRUE)
 
   set.seed(456)
-  res <- searchOptimalConfiguration(
+  res <- muffle_search_settings_warning(searchOptimalConfiguration(
     baseline_tree              = baseline,
     trait_data                 = X,
     formula                    = "trait_data ~ 1",
@@ -253,8 +681,9 @@ test_that("searchOptimalConfiguration also runs in purely sequential mode", {
     plot                       = FALSE,
     IC                         = "GIC",
     store_model_fit_history    = FALSE,
-    method                     = "LL"
-  )
+    method                     = "LL",
+    progress                   = FALSE
+  ))
 
   # Minimal sanity checks
   testthat::expect_type(res, "list")
@@ -272,7 +701,7 @@ test_that("searchOptimalConfiguration returns sensible output when no shifts are
   X <- built$X
 
   set.seed(789)
-  res <- searchOptimalConfiguration(
+  res <- muffle_search_settings_warning(searchOptimalConfiguration(
     baseline_tree              = baseline,
     trait_data                 = X,
     formula                    = "trait_data ~ 1",
@@ -283,8 +712,9 @@ test_that("searchOptimalConfiguration returns sensible output when no shifts are
     IC                         = "GIC",
     store_model_fit_history    = TRUE,
     method                     = "LL",
-    uncertaintyweights = TRUE
-  )
+    uncertaintyweights        = TRUE,
+    progress                   = FALSE
+  ))
 
   # No shifts detected
   testthat::expect_equal(length(res$shift_nodes_no_uncertainty), 0L)
@@ -331,7 +761,7 @@ test_that("searchOptimalConfiguration returns sensible output when no shifts are
   }
 })
 
-# Test: searchOptimalConfiguration records accepted steps with history (and covers plot/postorder) (threshold=-Inf; plot=TRUE; store_model_fit_history=TRUE)
+# Test: searchOptimalConfiguration records accepted steps with history (and covers plot/postorder) (threshold=0; plot=TRUE; store_model_fit_history=TRUE)
 test_that("searchOptimalConfiguration records accepted steps with history (and covers plot/postorder)", {
   skip_if_missing_deps()
   simdata <- load_simdata_fixture()
@@ -346,21 +776,22 @@ test_that("searchOptimalConfiguration records accepted steps with history (and c
   }, add = TRUE)
 
   set.seed(10101)
-  res <- searchOptimalConfiguration(
+  res <- muffle_search_settings_warning(searchOptimalConfiguration(
     baseline_tree              = baseline,
     trait_data                 = X,
     formula                    = "trait_data ~ 1",
     min_descendant_tips        = 10,      # broader candidate set
     num_cores                  = 1,
-    shift_acceptance_threshold = -Inf,   # force acceptance of the first candidate evaluated
+    shift_acceptance_threshold = 0,
     plot                       = TRUE,   # hit plotSimmap/nodelabels branches
     #postorder_traversal        = TRUE,   # hit postorder switch
     IC                         = "GIC",
     store_model_fit_history    = TRUE,   # ensure history writer runs
-    method                     = "LL"
-  )
+    method                     = "LL",
+    progress                   = FALSE
+  ))
 
-  # We expect at least one shift to be recorded/accepted under -Inf threshold
+  # This fixture produces at least one improving shift at threshold 0.
   testthat::expect_type(res, "list")
   testthat::expect_true(length(res$shift_nodes_no_uncertainty) >= 1L)
 
@@ -421,7 +852,7 @@ test_that("searchOptimalConfiguration emits progress output when verbose = TRUE"
 
   # Case A: plot = FALSE
   combined_a <- capture_both(
-    searchOptimalConfiguration(
+    suppressWarnings(searchOptimalConfiguration(
       baseline_tree              = tr,
       trait_data                 = X,
       formula                    = "trait_data ~ 1",
@@ -431,8 +862,9 @@ test_that("searchOptimalConfiguration emits progress output when verbose = TRUE"
       plot                       = FALSE,
       store_model_fit_history    = FALSE,
       method                     = "LL",
-      verbose                    = TRUE
-    )
+      verbose                    = TRUE,
+      progress                    = FALSE
+    ))
   )
   testthat::expect_true(grepl("Generating candidate shift models", combined_a))
 
@@ -441,7 +873,7 @@ test_that("searchOptimalConfiguration emits progress output when verbose = TRUE"
   on.exit(try(grDevices::dev.off(), silent = TRUE), add = TRUE)
 
   combined_b <- capture_both(
-    searchOptimalConfiguration(
+    suppressWarnings(searchOptimalConfiguration(
       baseline_tree              = tr,
       trait_data                 = X,
       formula                    = "trait_data ~ 1",
@@ -451,8 +883,9 @@ test_that("searchOptimalConfiguration emits progress output when verbose = TRUE"
       plot                       = TRUE,
       store_model_fit_history    = FALSE,
       method                     = "LL",
-      verbose                    = TRUE
-    )
+      verbose                    = TRUE,
+      progress                    = FALSE
+    ))
   )
   testthat::expect_true(grepl("Generating candidate shift models", combined_b))
 })
@@ -481,7 +914,7 @@ test_that("searchOptimalConfiguration is quiet when verbose = FALSE", {
 
   # plot = FALSE
   cap_a <- capture_both(
-    searchOptimalConfiguration(
+    suppressWarnings(searchOptimalConfiguration(
       baseline_tree              = tr,
       trait_data                 = X,
       formula                    = "trait_data ~ 1",
@@ -491,8 +924,9 @@ test_that("searchOptimalConfiguration is quiet when verbose = FALSE", {
       plot                       = FALSE,
       store_model_fit_history    = FALSE,
       method                     = "LL",
-      verbose                    = FALSE
-    )
+      verbose                    = FALSE,
+      progress                   = FALSE
+    ))
   )
   testthat::expect_equal(nchar(cap_a$msgs), 0)
   testthat::expect_equal(nchar(cap_a$out), 0)
@@ -502,7 +936,7 @@ test_that("searchOptimalConfiguration is quiet when verbose = FALSE", {
   on.exit(try(grDevices::dev.off(), silent = TRUE), add = TRUE)
 
   cap_b <- capture_both(
-    searchOptimalConfiguration(
+    suppressWarnings(searchOptimalConfiguration(
       baseline_tree              = tr,
       trait_data                 = X,
       formula                    = "trait_data ~ 1",
@@ -512,8 +946,9 @@ test_that("searchOptimalConfiguration is quiet when verbose = FALSE", {
       plot                       = TRUE,
       store_model_fit_history    = FALSE,
       method                     = "LL",
-      verbose                    = FALSE
-    )
+      verbose                    = FALSE,
+      progress                   = FALSE
+    ))
   )
   testthat::expect_equal(nchar(cap_b$msgs), 0)
   testthat::expect_equal(nchar(cap_b$out), 0)
@@ -541,6 +976,7 @@ test_that("searchOptimalConfiguration errors on invalid IC", {
       store_model_fit_history    = FALSE,
       method                     = "LL",
       verbose                    = FALSE,
+      progress                    = FALSE,
       IC                         = "AIC"
     ),
     "IC must be GIC or BIC"
@@ -568,11 +1004,12 @@ test_that("searchOptimalConfiguration errors if both uncertaintyweights flags ar
       store_model_fit_history    = FALSE,
       method                     = "LL",
       verbose                    = FALSE,
+      progress                    = FALSE,
       IC                         = "GIC",
       uncertaintyweights         = TRUE,
       uncertaintyweights_par     = TRUE
     ),
-    "Exactly one of uncertaintyweights or uncertaintyweights_par must be TRUE"
+    "uncertaintyweights and uncertaintyweights_par cannot both be TRUE"
   )
 })
 
@@ -597,6 +1034,7 @@ test_that("searchOptimalConfiguration skips IC weights (parallel) when no shifts
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC",
     uncertaintyweights_par     = TRUE
   )
@@ -638,6 +1076,7 @@ test_that("searchOptimalConfiguration takes multisession path when RSTUDIO=1", {
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC"
   )
 
@@ -654,8 +1093,9 @@ test_that("searchOptimalConfiguration restores BLAS/OpenMP env vars after candid
   )
   old <- Sys.getenv(thread_vars, unset = NA_character_)
 
-  # Pre-set at least one var so restore hits the else branch
+  # Pre-set one var and explicitly unset another so restore hits both branches.
   Sys.setenv(OMP_NUM_THREADS = "3")
+  Sys.unsetenv("OPENBLAS_NUM_THREADS")
   on.exit({
     for (nm in names(old)) {
       val <- old[[nm]]
@@ -683,10 +1123,15 @@ test_that("searchOptimalConfiguration restores BLAS/OpenMP env vars after candid
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC"
   )
 
   testthat::expect_identical(Sys.getenv("OMP_NUM_THREADS"), "3")
+  testthat::expect_identical(
+    Sys.getenv("OPENBLAS_NUM_THREADS", unset = NA_character_),
+    NA_character_
+  )
 })
 
 # Test: searchOptimalConfiguration returns consistent ic_weights for serial vs parallel modes (same seed; compares serial vs parallel weights)
@@ -711,11 +1156,12 @@ test_that("searchOptimalConfiguration returns consistent ic_weights for serial v
     formula                    = "trait_data ~ 1",
     min_descendant_tips        = 5,
     num_cores                  = 1,
-    shift_acceptance_threshold = -Inf,
+    shift_acceptance_threshold = 0,
     plot                       = FALSE,
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC",
     uncertaintyweights         = TRUE
   ))
@@ -728,11 +1174,12 @@ test_that("searchOptimalConfiguration returns consistent ic_weights for serial v
     formula                    = "trait_data ~ 1",
     min_descendant_tips        = 5,
     num_cores                  = 1,
-    shift_acceptance_threshold = -Inf,
+    shift_acceptance_threshold = 0,
     plot                       = FALSE,
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC",
     uncertaintyweights_par     = TRUE
   ))
@@ -777,9 +1224,7 @@ test_that("searchOptimalConfiguration returns consistent ic_weights for serial v
 test_that("searchOptimalConfiguration does not write files to the working directory", {
   skip_if_missing_deps()
 
-  # Isolated working directory (base R only)
-  wd <- tempfile("bifrost-wd-")
-  dir.create(wd, recursive = TRUE)
+  wd <- withr::local_tempdir(pattern = "bifrost-wd-")
   oldwd <- getwd()
   on.exit(setwd(oldwd), add = TRUE)
   setwd(wd)
@@ -802,7 +1247,8 @@ test_that("searchOptimalConfiguration does not write files to the working direct
     IC                         = "GIC",
     store_model_fit_history    = TRUE,  # key path we care about
     method                     = "LL",
-    verbose                    = FALSE
+    verbose                    = FALSE,
+    progress                    = FALSE
   )
 
   after <- list.files(".", recursive = TRUE, all.files = TRUE)
@@ -840,7 +1286,8 @@ test_that("searchOptimalConfiguration restores options(bifrost.verbose)", {
     IC                         = "GIC",
     store_model_fit_history    = FALSE,
     method                     = "LL",
-    verbose                    = TRUE   # triggers internal options() change
+    verbose                    = TRUE,  # triggers internal options() change
+    progress                   = FALSE
   ))
 
   testthat::expect_identical(getOption("bifrost.verbose"), FALSE)
@@ -866,6 +1313,7 @@ test_that("ic_weights has stable schema when requested", {
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC",
     uncertaintyweights_par     = TRUE
   )
@@ -897,7 +1345,8 @@ test_that("model_fit_history ic_acceptance_matrix is well-formed", {
     IC                      = "GIC",
     store_model_fit_history = TRUE,
     method                  = "LL",
-    verbose                 = FALSE
+    verbose                 = FALSE,
+    progress                 = FALSE
   )
 
   testthat::expect_true(is.list(res$model_fit_history))
@@ -933,7 +1382,8 @@ test_that("no-shifts path yields a usable model_no_uncertainty", {
     IC                         = "GIC",
     store_model_fit_history    = FALSE,
     method                     = "LL",
-    verbose                    = FALSE
+    verbose                    = FALSE,
+    progress                    = FALSE
   )
 
   testthat::expect_equal(length(res$shift_nodes_no_uncertainty), 0L)
@@ -945,20 +1395,16 @@ test_that("no-shifts path yields a usable model_no_uncertainty", {
 test_that("searchOptimalConfiguration captures warnings from shift evaluation", {
   skip_if_missing_deps()
 
-  ns <- asNamespace("bifrost")
-  orig_fit <- get("fitMvglsAndExtractGIC.formula", envir = ns)
+  fit_env <- environment(bifrost:::.bifrost_search_model_fun)
+  orig_fit <- get("fitMvglsAndExtractGIC.formula", envir = fit_env)
 
-  testthat::local_mocked_bindings(
-    fitMvglsAndExtractGIC.formula = function(formula, tree, trait_data, ...) {
-      in_withCallingHandlers <- any(vapply(sys.calls(), function(cl) {
-        is.call(cl) && is.name(cl[[1]]) && identical(as.character(cl[[1]]), "withCallingHandlers")
-      }, logical(1)))
-
-      if (in_withCallingHandlers) warning("forced warning from test")
-
+  local_search_rebind(
+    "fitMvglsAndExtractGIC.formula",
+    function(formula, tree, trait_data, ...) {
+      warning("forced warning from test")
       orig_fit(formula, tree, trait_data, ...)
     },
-    .env = ns
+    fit_env
   )
 
   set.seed(6)
@@ -977,6 +1423,7 @@ test_that("searchOptimalConfiguration captures warnings from shift evaluation", 
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC"
   ))
 
@@ -988,13 +1435,14 @@ test_that("searchOptimalConfiguration captures warnings from shift evaluation", 
 test_that("searchOptimalConfiguration records error entries in history and yields NA_real_ row", {
   skip_if_missing_deps()
 
-  ns <- asNamespace("bifrost")
+  forward_env <- environment(bifrost:::.bifrost_search_forward)
 
-  testthat::local_mocked_bindings(
-    addShiftToModel = function(tree, shift_node, shift_id) {
+  local_search_rebind(
+    "addShiftToModel",
+    function(tree, shift_node, shift_id) {
       list(tree = NULL, shift_id = shift_id + 1L)  # shifted_tree becomes NULL => fit errors
     },
-    .env = ns
+    forward_env
   )
 
   set.seed(7)
@@ -1013,12 +1461,26 @@ test_that("searchOptimalConfiguration records error entries in history and yield
     store_model_fit_history    = TRUE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "GIC"
   ))
 
   testthat::expect_true(!is.null(res$model_fit_history$ic_acceptance_matrix))
   mat <- res$model_fit_history$ic_acceptance_matrix
   testthat::expect_true(any(is.na(mat[, 1]), na.rm = TRUE))
+
+  fits <- res$model_fit_history$fits
+  error_entries <- vapply(
+    fits,
+    function(entry) identical(entry$status, "error"),
+    logical(1)
+  )
+  testthat::expect_true(any(error_entries))
+  testthat::expect_true(any(vapply(
+    fits[error_entries],
+    function(entry) isFALSE(entry$accepted) && is.na(entry$ic),
+    logical(1)
+  )))
 
   testthat::expect_true(!is.null(res$warnings))
   testthat::expect_true(any(grepl("Error in evaluating shift at node", unlist(res$warnings))))
@@ -1027,13 +1489,31 @@ test_that("searchOptimalConfiguration records error entries in history and yield
 # Test: searchOptimalConfiguration uses cat() progress path in interactive RStudio plotting (interactive+RSTUDIO=1; plot=TRUE with min_descendant_tips=Ntip)
 test_that("searchOptimalConfiguration uses cat() progress path in interactive RStudio plotting", {
   skip_if_missing_deps()
-  testthat::skip_if_not(interactive())
 
   old_rstudio <- Sys.getenv("RSTUDIO", unset = NA_character_)
   Sys.setenv(RSTUDIO = "1")
   on.exit({
     if (is.na(old_rstudio)) Sys.unsetenv("RSTUDIO") else Sys.setenv(RSTUDIO = old_rstudio)
   }, add = TRUE)
+
+  progress_output <- character(0)
+  flushed <- FALSE
+  search_with_mocked_progress <- searchOptimalConfiguration
+  environment(search_with_mocked_progress) <- list2env(list(
+    interactive = function() TRUE,
+    cat = function(..., file = "", sep = " ", fill = FALSE, labels = NULL, append = FALSE) {
+      progress_output <<- c(progress_output, paste(..., sep = sep, collapse = sep))
+      invisible(NULL)
+    },
+    sink.number = function(type = c("output", "message")) 0
+  ), parent = environment(searchOptimalConfiguration))
+  testthat::local_mocked_bindings(
+    flush.console = function() {
+      flushed <<- TRUE
+      invisible(NULL)
+    },
+    .package = "utils"
+  )
 
   # Null device so plot=TRUE doesn't pop windows
   grDevices::pdf(NULL)
@@ -1049,7 +1529,7 @@ test_that("searchOptimalConfiguration uses cat() progress path in interactive RS
   # That makes candidate_trees_shifts empty => the main loop never runs,
   # so the plot code never calls getStates(shifted_tree,...).
   out <- testthat::capture_output({
-    suppressWarnings(suppressMessages(searchOptimalConfiguration(
+    suppressWarnings(suppressMessages(search_with_mocked_progress(
       baseline_tree              = tr,
       trait_data                 = X,
       formula                    = "trait_data ~ 1",
@@ -1060,24 +1540,144 @@ test_that("searchOptimalConfiguration uses cat() progress path in interactive RS
       IC                         = "GIC",
       store_model_fit_history    = FALSE,
       method                     = "LL",
-      verbose                    = TRUE
+      verbose                    = TRUE,
+      progress                    = FALSE
     )))
   })
 
   txt <- paste(out, collapse = "\n")
-  testthat::expect_true(grepl("Generating candidate shift models", txt))
+  testthat::expect_false(grepl("Generating candidate shift models", txt))
+  testthat::expect_true(any(grepl("Generating candidate shift models", progress_output, fixed = TRUE)))
+  testthat::expect_true(flushed)
+})
+
+test_that("searchOptimalConfiguration validates formula input types", {
+  skip_if_missing_deps()
+
+  set.seed(124)
+  tr <- ape::rtree(10)
+  X <- matrix(rnorm(10 * 2), ncol = 2)
+  rownames(X) <- tr$tip.label
+
+  testthat::expect_error(
+    searchOptimalConfiguration(
+      baseline_tree = tr,
+      trait_data = X,
+      formula = 1,
+      min_descendant_tips = 3,
+      num_cores = 1,
+      plot = FALSE,
+      IC = "GIC",
+      progress = FALSE
+    ),
+    "single character string or formula object"
+  )
+})
+
+test_that("search helper uses future path only when requested", {
+  skip_if_missing_deps()
+
+  thread_vars <- c(
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS"
+  )
+  old_threads <- Sys.getenv(thread_vars, unset = NA_character_)
+  restore_threads <- function() {
+    for (nm in thread_vars) {
+      val <- old_threads[[nm]]
+      if (is.na(val)) {
+        Sys.unsetenv(nm)
+      } else {
+        do.call(Sys.setenv, stats::setNames(list(val), nm))
+      }
+    }
+    future::plan(future::sequential)
+  }
+  on.exit(restore_threads(), add = TRUE)
+
+  Sys.setenv(OMP_NUM_THREADS = "7")
+  Sys.unsetenv("NUMEXPR_NUM_THREADS")
+
+  serial <- bifrost:::.bifrost_search_lapply(
+    1:3,
+    function(x) x + 1L,
+    num_cores = 1,
+    is_rstudio = FALSE
+  )
+  testthat::expect_identical(serial, list(2L, 3L, 4L))
+  testthat::expect_identical(Sys.getenv("OMP_NUM_THREADS"), "7")
+
+  multisession <- bifrost:::.bifrost_run_future_lapply_safe(
+    1:2,
+    function(x) x * 2L,
+    workers = 2,
+    is_rstudio_flag = TRUE
+  )
+  testthat::expect_identical(multisession, list(2L, 4L))
+  testthat::expect_identical(Sys.getenv("OMP_NUM_THREADS"), "7")
+
+  parallel_wrapper <- bifrost:::.bifrost_search_lapply(
+    1:2,
+    function(x) x * 4L,
+    num_cores = 2,
+    is_rstudio = TRUE
+  )
+  testthat::expect_identical(parallel_wrapper, list(4L, 8L))
+  testthat::expect_identical(Sys.getenv("OMP_NUM_THREADS"), "7")
+
+  if (.Platform$OS.type == "unix" &&
+      !identical(Sys.info()[["sysname"]], "SunOS")) {
+    multicore <- bifrost:::.bifrost_run_future_lapply_safe(
+      1:2,
+      function(x) x * 3L,
+      workers = 2,
+      is_rstudio_flag = FALSE
+    )
+    testthat::expect_identical(multicore, list(3L, 6L))
+    testthat::expect_identical(Sys.getenv("OMP_NUM_THREADS"), "7")
+  }
+})
+
+test_that("search history loader derives missing IC values from stored models", {
+  sub_dir <- withr::local_tempdir(pattern = "bifrost-history-")
+  saveRDS(
+    list(
+      ic = NULL,
+      model = list(GIC = list(GIC = 12.5)),
+      accepted = TRUE
+    ),
+    file.path(sub_dir, "iteration_2.rds")
+  )
+  saveRDS(
+    list(
+      ic = NA_real_,
+      model = NULL,
+      accepted = FALSE
+    ),
+    file.path(sub_dir, "iteration_10.rds")
+  )
+
+  history <- bifrost:::.bifrost_search_load_history(sub_dir, IC = "GIC")
+
+  testthat::expect_equal(history$ic_acceptance_matrix[, 1], c(12.5, NA_real_))
+  testthat::expect_equal(history$ic_acceptance_matrix[, 2], c(1, 0))
 })
 
 # Test: searchOptimalConfiguration serial ic_weights executes BIC branch (mocks fitMvglsAndExtractBIC.formula; uncertaintyweights=TRUE)
 test_that("searchOptimalConfiguration serial ic_weights executes BIC branch", {
   skip_if_missing_deps()
 
-  ns <- asNamespace("bifrost")
+  fit_env <- environment(bifrost:::.bifrost_search_model_fun)
+  weights_env <- environment(bifrost:::.bifrost_search_calculate_ic_weights)
 
   # Deterministic decreasing BIC so shifts are accepted and weights run
   k <- 0L
-  testthat::local_mocked_bindings(
-    fitMvglsAndExtractBIC.formula = function(formula, tree, trait_data, ...) {
+  local_search_rebind(
+    "fitMvglsAndExtractBIC.formula",
+    function(formula, tree, trait_data, ...) {
       k <<- k + 1L
       bic_val <- 1000 - 10 * k
       list(
@@ -1085,9 +1685,13 @@ test_that("searchOptimalConfiguration serial ic_weights executes BIC branch", {
         BIC = list(BIC = bic_val)
       )
     },
+    fit_env
+  )
+  local_search_rebind(
     # Make shift-removal safe & deterministic for weights loop
-    removeShiftFromTree = function(tree, shift_node, stem = FALSE) tree,
-    .env = ns
+    "removeShiftFromTree",
+    function(tree, shift_node, stem = FALSE) tree,
+    weights_env
   )
 
   set.seed(999)
@@ -1101,10 +1705,11 @@ test_that("searchOptimalConfiguration serial ic_weights executes BIC branch", {
     formula                    = "trait_data ~ 1",
     min_descendant_tips        = 2,
     num_cores                  = 1,
-    shift_acceptance_threshold = -Inf,   # accept shifts
+    shift_acceptance_threshold = 0,
     plot                       = FALSE,
     store_model_fit_history    = FALSE,
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "BIC",
     uncertaintyweights         = TRUE    # SERIAL weights path
   ))
@@ -1114,24 +1719,40 @@ test_that("searchOptimalConfiguration serial ic_weights executes BIC branch", {
   testthat::expect_true(nrow(res$ic_weights) >= 1L)
 })
 
+test_that("IC-weight characterization rejects simultaneous serial and parallel modes", {
+  testthat::expect_error(
+    bifrost:::.bifrost_search_calculate_ic_weights(
+      uncertaintyweights = TRUE,
+      uncertaintyweights_par = TRUE,
+      shift_vec = list(),
+      best_tree_no_uncertainty = NULL,
+      model_with_shift_no_uncertainty = NULL,
+      IC = "GIC",
+      formula = trait_data ~ 1,
+      trait_data = matrix(numeric(), nrow = 0L),
+      args_list = list(),
+      num_cores = 1L,
+      is_rstudio = FALSE,
+      verbose_log = function(...) invisible(NULL)
+    ),
+    "Exactly one of uncertaintyweights or uncertaintyweights_par must be TRUE"
+  )
+})
+
 # Test: searchOptimalConfiguration captures warnings from shift evaluation (BIC) (mocks fitMvglsAndExtractBIC.formula to warn)
 test_that("searchOptimalConfiguration captures warnings from shift evaluation (BIC)", {
   skip_if_missing_deps()
 
-  ns <- asNamespace("bifrost")
-  orig_fit <- get("fitMvglsAndExtractBIC.formula", envir = ns)
+  fit_env <- environment(bifrost:::.bifrost_search_model_fun)
+  orig_fit <- get("fitMvglsAndExtractBIC.formula", envir = fit_env)
 
-  testthat::local_mocked_bindings(
-    fitMvglsAndExtractBIC.formula = function(formula, tree, trait_data, ...) {
-      in_withCallingHandlers <- any(vapply(sys.calls(), function(cl) {
-        is.call(cl) && is.name(cl[[1]]) && identical(as.character(cl[[1]]), "withCallingHandlers")
-      }, logical(1)))
-
-      if (in_withCallingHandlers) warning("forced warning from test (BIC)")
-
+  local_search_rebind(
+    "fitMvglsAndExtractBIC.formula",
+    function(formula, tree, trait_data, ...) {
+      warning("forced warning from test (BIC)")
       orig_fit(formula, tree, trait_data, ...)
     },
-    .env = ns
+    fit_env
   )
 
   set.seed(456)
@@ -1150,6 +1771,7 @@ test_that("searchOptimalConfiguration captures warnings from shift evaluation (B
     store_model_fit_history    = FALSE,
     method                     = "LL",
     verbose                    = FALSE,
+    progress                    = FALSE,
     IC                         = "BIC"
   ))
 

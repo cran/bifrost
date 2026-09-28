@@ -5,6 +5,7 @@
 [![Codecov test coverage](https://codecov.io/gh/jakeberv/bifrost/graph/badge.svg)](https://app.codecov.io/gh/jakeberv/bifrost)
 [![CRAN status](https://www.r-pkg.org/badges/version/bifrost)](https://CRAN.R-project.org/package=bifrost)
 [![CRAN downloads](https://cranlogs.r-pkg.org/badges/grand-total/bifrost)](https://cran.r-project.org/package=bifrost)
+[![Paper: Nature Ecology & Evolution](https://img.shields.io/badge/paper-Nature%20Ecology%20%26%20Evolution-000000.svg)](https://www.nature.com/articles/s41559-026-03110-5.epdf?sharing_token=PNALt0fkwK7zWng8AcHUw9RgN0jAjWel9jnR3ZoTv0MY7RbzUNNAnMQsco3ST9ehysSF4OiMNSc7ku-ywR1G5HC7BVOhY0inuNGDXiP16Z26oaZtwiblA-f61S2M-2llNRsRbegpuTeyhziEWzMipUgtyZKBEe3dsZlBVa67S4c%3D)
 [![bioRxiv preprint](https://img.shields.io/endpoint?url=https%3A%2F%2Fjakeberv.github.io%2Fbiorxiv-badge%2Fbadges%2F10.64898__2026.04.12.718036.json)](https://doi.org/10.64898/2026.04.12.718036)
 [![License: GPL (>= 2)](https://img.shields.io/badge/license-GPL%20(%E2%89%A5%202)-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![Lifecycle: maturing](https://img.shields.io/badge/lifecycle-maturing-blue.svg)](https://lifecycle.r-lib.org/articles/stages.html)
@@ -22,7 +23,31 @@
   </strong>
 </span>
 
-`bifrost` performs branch-level inference of multi-regime, multivariate trait evolution on a phylogeny using [penalized-likelihood multivariate GLS fits](https://doi.org/10.1093/sysbio/syy045). The current version searches for evolutionary model shifts under a multi-rate Brownian Motion (BMM) model with proportional regime VCV scaling, operates directly in trait space (for example, without PCA), and is designed for high-dimensional datasets (`p > n`) and large trees (`> 1000` tips). The method works with fossil tip-dated trees and with a wide range of multivariate comparative data, including GPA-aligned morphometric coordinates, linear dimensions, and related trait matrices. A future major release will add support for the [multivariate scalar Ornstein-Uhlenbeck process](https://doi.org/10.1093/sysbio/syy005).
+`bifrost` performs branch-level inference of multi-regime, multivariate trait evolution on a phylogeny using [penalized-likelihood multivariate GLS fits](https://doi.org/10.1093/sysbio/syy045). The current version searches for evolutionary model shifts under a multi-rate Brownian Motion (BMM) model with proportional regime VCV scaling, operates directly in trait space (for example, without PCA), and is designed for high-dimensional datasets (`p > n`) and large trees (`> 1000` tips).
+
+The method works with fossil tip-dated trees and with a wide range of multivariate comparative data, including GPA-aligned morphometric coordinates, linear dimensions, and related trait matrices. A future major release will add support for the [multivariate scalar Ornstein-Uhlenbeck process](https://doi.org/10.1093/sysbio/syy005).
+
+## CRAN downloads
+
+<p align="center">
+  <picture class="cran-downloads-picture">
+    <source
+      data-theme="dark"
+      media="(prefers-color-scheme: dark)"
+      srcset="https://raw.githubusercontent.com/jakeberv/bifrost/main/man/figures/cran-downloads-dark.png"
+    />
+    <source
+      data-theme="light"
+      media="(prefers-color-scheme: light)"
+      srcset="https://raw.githubusercontent.com/jakeberv/bifrost/main/man/figures/cran-downloads.png"
+    />
+    <img
+      src="https://raw.githubusercontent.com/jakeberv/bifrost/main/man/figures/cran-downloads.png"
+      alt="Cumulative CRAN downloads for bifrost"
+      width="560"
+    />
+  </picture>
+</p>
 
 ## Installation
 
@@ -45,6 +70,37 @@ Install [Rtools](https://cran.r-project.org/bin/windows/Rtools/) for your R vers
 **macOS users:**  
 You may need to install [XQuartz](https://www.xquartz.org/) to build or run packages that depend on certain graphical or system libraries.
 
+## Development status
+
+Version 0.2.0 requires R 4.2 or newer. See the
+[development-status page](https://jakeberv.com/bifrost/articles/development-status.html)
+for current CRAN and GitHub availability, release caveats, and the website
+article policy. See [NEWS](https://jakeberv.com/bifrost/news/index.html) for the
+complete changelog.
+
+When upgrading from 0.1.4, replace the removed plotting wrapper with
+`plot(icTrajectory(x))` when `x` is a `bifrost_search` or compatible
+search-result list. See [NEWS](https://jakeberv.com/bifrost/news/index.html)
+for the raw-matrix migration and argument mapping.
+
+## Example data
+
+The empirical case studies use download-on-demand example data rather than
+packaged datasets. Package installation and core analyses remain offline; data
+are fetched only by explicit calls to `bifrost_example_file()`. The first call
+without a verified cache downloads and validates the manifest currently tracked
+on GitHub `main`, then verifies the selected artifact against the manifest's
+SHA-256 checksum and byte size. Later calls reuse the verified cache, while
+`refresh = TRUE` checks `main` again for maintained updates. The supported
+identifiers and their provenance are listed in the [example-data guide](https://github.com/jakeberv/bifrost/blob/main/data-remote/README.md).
+
+```r
+tree_path <- bifrost_example_file("jaw-tree")
+landmark_path <- bifrost_example_file("jaw-landmarks")
+fish.tree <- readRDS(tree_path)
+landmarks <- readRDS(landmark_path)
+```
+
 ## Overview
 
 - **Primary goal.** Infer *where*, *when*, and *how* patterns of phenotypic evolution change across a tree using many traits simultaneously.
@@ -58,11 +114,14 @@ You may need to install [XQuartz](https://www.xquartz.org/) to build or run pack
 - Under BMM, [proportional VCV scaling](https://doi.org/10.1111/j.1558-5646.1999.tb05414.x) across regimes for tractability at high `p`.
 - Provides a multivariate phylogenetic GLS (mvPGLS)-like framework in which hidden branch-specific rate regimes are inferred and incorporated when estimating predictor effects.
 - Candidate shift nodes are determined by a minimum clade size specified by the user.
-- Greedy [step-wise heuristic search](https://nph.onlinelibrary.wiley.com/doi/10.1111/nph.19099) using GIC/BIC delta-IC thresholds, with optional IC-weight support for inferred shifts.
 - Output includes estimated VCV per regime, shift weights, and SIMMAP-style mappings for downstream visualization and analysis.
-- Parallelization via `future` and `future.apply`.
 
 ## Documentation
+
+The complete worked articles are maintained on the package website. Their
+sources and generated artifacts are intentionally excluded from the CRAN source
+package, so installing `bifrost` does not install vignettes or their empirical
+payloads.
 
 ### Background and theory
 
@@ -71,12 +130,39 @@ You may need to install [XQuartz](https://www.xquartz.org/) to build or run pack
 - [Whole-Tree Models, PCA, and bifrost](https://jakeberv.com/bifrost/articles/pca-model-selection-and-bifrost-vignette.html)  
   Explains why whole-tree homogeneous models and PCA truncation can mislead inference when evolutionary processes vary across the tree.
 
-### Using bifrost
+### Getting Started
 
 - [Quick Start with bifrost](https://jakeberv.com/bifrost/articles/quick-start-vignette.html)  
   A practical introduction to the core `bifrost` workflow using a minimal simulated example, including setup, key arguments, outputs, and interpretation.
 - [Detecting Evolutionary Shifts in Paleozoic Fish Jaw Shape with bifrost](https://jakeberv.com/bifrost/articles/jaw-shape-vignette.html)  
-  A full empirical case study using the packaged fossil jaw-shape dataset, showing how to run, inspect, and interpret a real `bifrost` analysis end to end.
+  A full empirical case study using download-on-demand fossil jaw-shape example data, showing how to run, inspect, and interpret a real `bifrost` analysis end to end.
+
+### Rate Mapping
+
+- [Mapping Sensitivity in Jaw-Shape Evolutionary Rates with rateMap, Part 1](https://jakeberv.com/bifrost/articles/rate-map-jaw-shape-vignette.html)
+  A follow-up case study showing the compute-first `rateMap()` workflow: build a reusable branch-rate summary object from completed searches, diagnose broad fitted-rate ranges, and display near-zero branches with explicit diagnostic metadata.
+- [Mapping Sensitivity in Jaw-Shape Evolutionary Rates with rateMap, Part 2](https://jakeberv.com/bifrost/articles/rate-map-jaw-shape-part-2-comparisons.html)
+  Extends the same jaw-shape sweep into IC weighting, uncertainty summaries, same-topology tree samples, original-scale rates, interval maps, and additional diagnostics.
+
+### Avian Skeleton Case Study
+
+- [Passerine Body Plan Evolution, Part 1: Fitting and Inspecting a Search](https://jakeberv.com/bifrost/articles/avian-skeleton-part-1.html)
+  Introduces the empirical dataset, fits the manuscript-scale search, and inspects the inferred shifts and IC trajectory.
+- [Passerine Body Plan Evolution, Part 2: Lineage-Rate Summaries](https://jakeberv.com/bifrost/articles/avian-skeleton-part-2.html)
+  Reconstructs tip-level lineage-rate summaries and visualizes their temporal and spatial variation.
+- [Passerine Body Plan Evolution, Part 3: Shift Timing and Distribution Fits](https://jakeberv.com/bifrost/articles/avian-skeleton-part-3.html)
+  Extracts shift events and evaluates waiting-time and lineage-rate distributions.
+- [Passerine Body Plan Evolution, Part 4: Shift Magnitude Comparisons](https://jakeberv.com/bifrost/articles/avian-skeleton-part-4.html)
+  Quantifies and compares the magnitudes of inferred rate shifts among biological groups.
+- [Passerine Body Plan Evolution, Part 5: Post-hoc Integration and Covariance Structure](https://jakeberv.com/bifrost/articles/avian-skeleton-part-5.html)
+  Examines regime-specific covariance, modularity, integration, and post-hoc phylogenetic relationships.
+
+### Simulation and Calibration
+
+- [Empirically Calibrated Simulations for bifrost, Part 1: Performance](https://jakeberv.com/bifrost/articles/simulation-study-part-1.html)
+  Builds reproducible null and shifted simulations and reports false-positive behavior and strict and fuzzy shift recovery.
+- [Empirically Calibrated Simulations for bifrost, Part 2: Tuning and Application](https://jakeberv.com/bifrost/articles/simulation-study-part-2.html)
+  Tunes search controls with null safeguards and fuzzy balanced accuracy, then carries the selected settings into empirical analysis.
 
 ## Additional note
 
@@ -93,13 +179,13 @@ citation("bifrost")
 ### Recommended citations
 
 1. `bifrost` methods / application paper  
-   Berv JS, Probst CM, Claramunt S, Shipley JR, Friedman M, Smith SA, Fouhey DF, Weeks BC (2026). *Rates of passerine body plan evolution in time and space*. *Nature Ecology & Evolution*. In press.
+   Berv JS, Probst CM, Claramunt S, Shipley JR, Friedman M, Smith SA, Fouhey DF, Weeks BC (2026). *Rates of passerine body plan evolution in time and space*. *Nature Ecology & Evolution*. [https://doi.org/10.1038/s41559-026-03110-5](https://doi.org/10.1038/s41559-026-03110-5)
 
 2. `bifrost` preprint  
    Berv JS, Fox N, Thorstensen MJ, Lloyd-Laney H, Troyer EM, Rivero-Vega RA, Smith SA, Friedman M, Fouhey DF, Weeks BC (2026). *bifrost: an R package for scalable inference of phylogenetic shifts in multivariate evolutionary dynamics*. *bioRxiv*. [https://doi.org/10.64898/2026.04.12.718036](https://doi.org/10.64898/2026.04.12.718036)
 
 3. `bifrost` software citation  
-   Berv JS, Fox N, Thorstensen MJ, Lloyd-Laney H, Troyer EM, Rivero-Vega RA, Smith SA, Friedman M, Fouhey DF, Weeks BC (2026). *Branch-Level Inference Framework for Recognizing Optimal Shifts in Traits*. R package version 0.1.4. [https://CRAN.R-project.org/package=bifrost](https://CRAN.R-project.org/package=bifrost)
+   Berv JS, Fox N, Thorstensen MJ, Lloyd-Laney H, Troyer EM, Rivero-Vega RA, Smith SA, Friedman M, Fouhey DF, Weeks BC (2026). *Branch-Level Inference Framework for Recognizing Optimal Shifts in Traits*. R package version 0.2.0. [https://CRAN.R-project.org/package=bifrost](https://CRAN.R-project.org/package=bifrost)
 
 4. `mvMORPH` package paper  
    Clavel J, Escarguel G, Merceron G (2015). *mvmorph: an R package for fitting multivariate evolutionary models to morphometric data*. *Methods in Ecology and Evolution*, 6(11), 1311-1319. [https://doi.org/10.1111/2041-210X.12420](https://doi.org/10.1111/2041-210X.12420)
@@ -121,13 +207,19 @@ This project is released under the GPL (>= 2) License. See the `LICENSE` file fo
 
 The name of our R package is inspired by the Bifröst, the rainbow bridge of Norse mythology that connects Earth (Midgard) and Asgard within the cosmic structure of Yggdrasil, the Tree of Life, echoing how this framework links observable data to hidden evolutionary shifts across the history of life.
 
-Development of the `bifrost` R package was supported by the [Oxford Research Software Engineering Group](https://www.rse.ox.ac.uk/schmidt-ai-science), with support from [Schmidt Sciences, LLC.](https://www.schmidtsciences.org/ai-in-science/) and the [Michigan Institute for Data Science and AI in Society](https://midas.umich.edu/).
+Development of the `bifrost` R package was supported by the [Oxford Research Software Engineering Group](https://www.rse.ox.ac.uk/schmidt-ai-science), with support from [Schmidt Sciences, LLC.](https://www.schmidtsciences.org/ai-in-science/) and the Michigan Institute for Data Science and AI in Society.
 
 <p align="center" style="display:flex; justify-content:center; align-items:center; gap:50px; padding:30px 0;">
-  <img src="https://jakeberv.com/images/SchmidtSciencesLogo.png"
-       alt="Schmidt Sciences logo"
-       style="height:90px !important; width:auto !important; max-width:100%;" />
-  <img src="https://www.rse.ox.ac.uk/sites/default/files/rse/site-logo/2024_oxrse_next_to_oxford.svg"
+  <picture class="schmidt-sciences-picture">
+    <source data-theme="dark" media="(prefers-color-scheme: dark)"
+            srcset="man/figures/schmidt-sciences-dark.png" />
+    <source data-theme="light" media="(prefers-color-scheme: light)"
+            srcset="https://jakeberv.com/images/SchmidtSciencesLogo.png" />
+    <img src="https://jakeberv.com/images/SchmidtSciencesLogo.png"
+         alt="Schmidt Sciences logo" height="90"
+         style="height:90px !important; width:auto !important; max-width:100%;" />
+  </picture>
+  <img src="https://www.rse.ox.ac.uk/sites/g/files/vzsiac2926/files/2026-09/oxrse_logo-1.png"
        alt="Oxford RSE logo"
        style="height:90px !important; width:auto !important; max-width:100%;" />
 </p>

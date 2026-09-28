@@ -1,7 +1,7 @@
 Package: bifrost
 Title: Branch-Level Inference Framework for Recognizing Optimal Shifts
         in Traits
-Version: 0.1.4
+Version: 0.2.0
 Authors@R: c(
     person(given = c("Jacob", "S."), family = "Berv", email = "jacob.berv@gmail.com", role = c("aut", "cre", "cph", "fnd"), comment = c(ORCID = "0000-0002-5962-0621")),
     person(given = "Nathan", family = "Fox", role = "aut", comment = c(ORCID = "0000-0002-2816-9751")),
@@ -13,25 +13,27 @@ Authors@R: c(
     person(given = "Matt", family = "Friedman", role = c("aut", "fnd"), comment = c(ORCID = "0000-0002-0114-7384")),
     person(given = c("David", "F."), family = "Fouhey", role = c("aut", "fnd"), comment = c(ORCID = "0000-0001-5028-5161")),
     person(given = c("Brian", "C."), family = "Weeks", role = c("aut", "fnd"), comment = c(ORCID = "0000-0003-2967-2970")))
-Description: Methods for detecting and visualizing cladogenic shifts in multivariate trait data on phylogenies. Implements penalized-likelihood multivariate generalized least squares models, enabling analyses of high-dimensional trait datasets and large trees via searchOptimalConfiguration(). Includes a greedy step-wise shift-search algorithm following approaches developed in Smith et al. (2023) <doi:10.1111/nph.19099> and Berv et al. (2024) <doi:10.1126/sciadv.adp0114>. Methods build on multivariate GLS approaches described in Clavel et al. (2019) <doi:10.1093/sysbio/syy045> and implemented in the mvgls() function from the 'mvMORPH' package. Documentation and vignettes are available at <https://jakeberv.com/bifrost/>, including worked examples for the jaw-shape dataset.
+Description: Methods for detecting, visualizing, and evaluating cladogenic shifts in multivariate trait data on phylogenies. Implements penalized-likelihood multivariate generalized least squares models and a greedy step-wise shift search for high-dimensional trait datasets and large trees via searchOptimalConfiguration(). Provides tools for inspecting search trajectories, summarizing branch and lineage rates, analyzing shift timing and magnitudes, estimating post-hoc regime covariance and integration, and running simulation-based calibration and tuning. The search follows approaches developed in Smith et al. (2023) <doi:10.1111/nph.19099> and Berv et al. (2024) <doi:10.1126/sciadv.adp0114>. Methods build on multivariate generalized least squares approaches described in Clavel et al. (2019) <doi:10.1093/sysbio/syy045> and implemented in the mvgls() function from the 'mvMORPH' package. Documentation and worked examples are available at <https://jakeberv.com/bifrost/>.
 License: GPL (>= 2)
 Encoding: UTF-8
-RoxygenNote: 7.3.3
 URL: https://jakeberv.com/bifrost/, https://github.com/jakeberv/bifrost
 BugReports: https://github.com/jakeberv/bifrost/issues
-Depends: R (>= 4.1)
-Imports: ape, future, future.apply, phytools, grDevices, stats,
-        mvMORPH, viridis, txtplot
-Suggests: HDInterval, RColorBrewer, boot, classInt, evd, fitdistrplus,
-        knitr, palaeoverse, parallel, patchwork, pbmcapply, phylolm,
-        plotly, readxl, rmarkdown, scales, scatterplot3d, testthat (>=
-        3.0.0), univariateML, spelling, htmltools
-VignetteBuilder: knitr
+Depends: R (>= 4.2)
+Imports: ape, cli (>= 3.6.0), digest, future (>= 1.49.0), future.apply,
+        parallel, progressr, phytools (>= 2.0-3), plotrix, RRphylo,
+        grDevices, graphics, grid, jsonlite, stats, mvMORPH, viridis,
+        txtplot
+Suggests: ComplexHeatmap, RColorBrewer, circlize, evd, phylolm,
+        rmarkdown, testthat (>= 3.0.0), univariateML, withr, spelling
+Config/Needs/website: classInt, geomorph, ggplot2, htmltools, knitr,
+        patchwork, pkgload, plotly, png, RhpcBLASctl, scatterplot3d,
+        yaml
 Config/testthat/edition: 3
 Config/testthat/parallel: false
 Language: en-US
+Config/roxygen2/version: 8.1.0
 NeedsCompilation: no
-Packaged: 2026-04-17 03:07:48 UTC; cotinga
+Packaged: 2026-09-28 02:24:23 UTC; cotinga
 Author: Jacob S. Berv [aut, cre, cph, fnd] (ORCID:
     <https://orcid.org/0000-0002-5962-0621>),
   Nathan Fox [aut] (ORCID: <https://orcid.org/0000-0002-2816-9751>),
@@ -52,4 +54,4 @@ Author: Jacob S. Berv [aut, cre, cph, fnd] (ORCID:
     <https://orcid.org/0000-0003-2967-2970>)
 Maintainer: Jacob S. Berv <jacob.berv@gmail.com>
 Repository: CRAN
-Date/Publication: 2026-04-17 04:00:03 UTC
+Date/Publication: 2026-09-28 03:00:15 UTC

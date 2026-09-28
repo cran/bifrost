@@ -1,3 +1,127 @@
+# bifrost 0.2.0
+
+## Changes for existing users
+
+* Indexed predictor terms now require one column each. The previously working
+  `trait_data[, 1:2] ~ trait_data[, 3:4]` shorthand is rejected. Use
+  `trait_data[, 1:2] ~ trait_data[, 3] + trait_data[, 4]`, or preferably named
+  columns: `cbind(y1, y2) ~ x1 + x2`. Multiple predictors remain supported.
+* Increased the minimum supported R version from 4.1 to 4.2.
+* Search defaults are now `min_descendant_tips = 10` and
+  `shift_acceptance_threshold = 20`, matching the focal settings of Berv et al.
+  (2026). These defaults can change search results when arguments are omitted.
+* Searches with `IC = "BIC"` now default to `method = "LL"`. An explicitly
+  supplied method takes precedence; GIC searches retain the `mvgls()` default.
+* Removed `plot_ic_acceptance_matrix()`. For a `bifrost_search` or compatible
+  search-result list, use `plot(icTrajectory(x))`. Legacy callers using a raw
+  two-column `matrix_data` object can migrate with:
+
+  ```r
+  legacy <- list(
+    baseline_ic = baseline_ic,
+    IC_used = "GIC",
+    model_fit_history = list(ic_acceptance_matrix = matrix_data)
+  )
+  plot(icTrajectory(legacy))
+  ```
+
+  Plotting arguments map from `plot_title` to `main`,
+  `plot_rate_of_improvement` to `show_delta`, and `rate_limits` to
+  `delta_limits`. Supply `baseline_ic` to `icTrajectory()`.
+* Vignettes and empirical datasets are now distributed through the package
+  website rather than the CRAN package. Replace former
+  `system.file("extdata", ...)` paths with `bifrost_example_file()`. The first
+  uncached request downloads the checksum-verified artifact tracked on GitHub
+  `main`; subsequent calls use the verified cache unless `refresh = TRUE`.
+  Installation, attachment, and package examples do not require these downloads.
+* `runSearchTuningGrid()` now pairs simulated datasets across settings in both
+  serial and parallel runs. Separate GIC and BIC calls with matching simulation
+  inputs and seeds are also paired. Previously seeded grid results will change;
+  existing cached results are not replaced. Returned objects record
+  `paired_settings` and `study_seeds`.
+
+## Search and result inspection
+
+* Fixed a regression in formula normalization that added an intercept to
+  formulas explicitly using `0 +` or `- 1`. Searches now preserve the requested
+  intercept setting for numeric and factor predictors.
+* Expanded formula support to accept formula objects, numeric response-only
+  data frames for intercept-only searches, and named-column data-frame formulas
+  for pGLS-style workflows.
+* Added `icTrajectory()` and its plot method for inspecting search histories.
+  Results now record candidate nodes, resolved progress settings, and detailed
+  proposal histories, including accepted, rejected, and errored fits.
+* Added persistent, Future-compatible progress displays for candidate scoring,
+  shift evaluation, and IC-weight re-estimation. Use `progress = FALSE` to
+  disable them independently of `verbose` output.
+* Strengthened validation of descendant-tip cutoffs, shift-acceptance thresholds,
+  and conflicting uncertainty-weight options. Diagnostics flag small clade
+  sizes, low acceptance thresholds, and searches with no eligible candidates.
+  Simulation runs muffle repeated settings advisories while preserving fitting
+  and optimizer warnings.
+* Baseline-only results consistently retain regime label `"0"` and the fitted
+  global BM covariance in `VCVs[["0"]]`. Covariance summaries no longer issue
+  the proportional multi-regime warning for this single covariance.
+* Fixed printing of expression-valued search inputs.
+
+## Rates, shifts, and regime covariance
+
+* Added `rateMap()` and supporting methods for inspecting branch-rate patterns.
+  Legends respect uneven category breaks. `generateViridisColorScale()` requires
+  numeric input and uses sorted rank rather than numeric distance.
+* Added `lineage_rates()` and tools for summarizing shift nodes, transitions,
+  waiting times, and magnitudes; fitting and bootstrapping rate distributions;
+  and comparing shift magnitudes.
+* Added `fit_regime_covariances()`, `fit_regime_covariance_runs()`, module
+  diagnostics, correlation-matrix PCA, integration summaries, and
+  `regime_integration_pgls()` for post-hoc analyses of fitted regimes.
+* Covariance validation now uses a tolerance relative to matrix scale, so tiny
+  asymmetric or indefinite matrices cannot pass merely because their entries
+  are small. Valid covariance summaries are unchanged.
+
+## Simulation and tuning
+
+* Added reproducible simulation templates, null and shifted datasets,
+  false-positive and shift-recovery studies, recovery evaluation, and fixed-IC
+  tuning grids.
+* Added empirical null, proportional-shift, and integration-rate robustness
+  workflows based on fitted residual covariance. Generators default to
+  `simulation_generator = "original"` to reproduce the published operations;
+  the full-covariance Wishart/spectral generator is available with `"empirical"`.
+* Added `selectTunedSearchParameters()` to filter settings using false-positive
+  and evaluability safeguards and rank feasible settings by fuzzy balanced
+  accuracy by default.
+* Tuning recommendations now retain `method` and `error` settings inherited
+  from the simulation template. Explicit search overrides remain authoritative;
+  simulation fits, scores, and the selection rule are unchanged.
+* Fixed recovery evaluation for successful searches with a `NULL` shift-node
+  vector. Zero-shift results now contribute missed shifts to strict, fuzzy,
+  and weighted summaries. Saved results can be reassessed without refitting;
+  failed or incomplete records remain excluded.
+* Fixed F1 scores incorrectly reported as `NA` when recovery is zero. Undefined
+  cases retain `NA`. Corrected the supplementary replicate metrics and their
+  export pipeline; pooled vignette summaries and selected settings are unchanged.
+* Reduced data transfer to parallel workers. Parallel search and simulation
+  preserve the caller's Future plan and reproducible RNG state while avoiding
+  nested worker oversubscription.
+
+## Documentation and maintenance
+
+* Added runnable help examples and website guides for rate maps, avian skeleton
+  analyses, simulation, and tuning, with downloadable PDFs and Colab notebooks.
+  Longer help examples use bounded `\donttest{}` blocks exercised in CI.
+* Updated citation metadata for the published *Nature Ecology & Evolution*
+  article and added a CRAN downloads chart to the README and website.
+* Added minimum dependency versions `future (>= 1.49.0)` and
+  `phytools (>= 2.0-3)`, added `plotrix`, corrected dependency declarations,
+  and moved website-only dependencies to `Config/Needs/website`.
+* Improved validation and error handling across lineage-rate, regime-integration,
+  simulation, and tuning workflows, and reorganized search internals while
+  preserving existing positional arguments.
+* Replaced the fragile method-forwarding test affected by mvMORPH 1.2.2 with
+  balanced examples that check the requested method and a finite GIC. This
+  changes the tests, not the BMM starting-value calculation in mvMORPH.
+
 # bifrost 0.1.4
 
 * Documentation / vignettes:
@@ -8,7 +132,7 @@
 
 * Citation / metadata:
   - Updated package authorship metadata to reflect the current author list.
-  - Updated `citation("bifrost")` for the live bioRxiv preprint and the in-press application paper.
+  - Updated `citation("bifrost")` for the live bioRxiv preprint and the application paper.
   - Added the foundational `mvMORPH` citations to the package citation metadata.
   - Added a formatted citation section and dynamic bioRxiv badge to the README.
 
